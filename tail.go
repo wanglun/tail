@@ -17,19 +17,24 @@ import (
 	"time"
 )
 
+const (
+	PositionNone = -1
+)
+
 var (
 	ErrStop = fmt.Errorf("tail should now stop")
 )
 
 type Line struct {
-	Text string
-	Time time.Time
-	Err  error // Error from tail
+	Text     string
+	Time     time.Time
+	Position int64 // get by Tell()
+	Err      error // Error from tail
 }
 
 // NewLine returns a Line with present time.
 func NewLine(text string) *Line {
-	return &Line{text, time.Now(), nil}
+	return &Line{text, time.Now(), PositionNone, nil}
 }
 
 // SeekInfo represents arguments to `os.Seek`
@@ -211,18 +216,25 @@ func (tail *Tail) tailFileSync() {
 
 	// Read line by line.
 	for {
+		position, err := tail.Tell()
+		if err != nil {
+			// Tell error
+			tail.Killf("Error tell position %s: %s", tail.Filename, err)
+			return
+		}
+
 		line, err := tail.readLine()
 
 		// Process `line` even if err is EOF.
 		if err == nil || (err == io.EOF && line != "") {
-			cooloff := !tail.sendLine(line)
+			cooloff := !tail.sendLine(line, position)
 			if cooloff {
 				// Wait a second before seeking till the end of
 				// file when rate limit is reached.
 				msg := fmt.Sprintf(
 					"Too much log activity; waiting a second " +
 						"before resuming tailing")
-				tail.Lines <- &Line{msg, time.Now(), fmt.Errorf(msg)}
+				tail.Lines <- &Line{msg, time.Now(), PositionNone, fmt.Errorf(msg)}
 				select {
 				case <-time.After(time.Second):
 				case <-tail.Dying():
@@ -328,7 +340,7 @@ func (tail *Tail) seekEnd() error {
 
 // sendLine sends the line(s) to Lines channel, splitting longer lines
 // if necessary. Return false if rate limit is reached.
-func (tail *Tail) sendLine(line string) bool {
+func (tail *Tail) sendLine(line string, position int64) bool {
 	now := time.Now()
 	lines := []string{line}
 
@@ -337,8 +349,8 @@ func (tail *Tail) sendLine(line string) bool {
 		lines = util.PartitionString(line, tail.MaxLineSize)
 	}
 
-	for _, line := range lines {
-		tail.Lines <- &Line{line, now, nil}
+	for i, line := range lines {
+		tail.Lines <- &Line{line, now, position + int64(i*tail.MaxLineSize), nil}
 	}
 
 	if tail.Config.RateLimiter != nil {
