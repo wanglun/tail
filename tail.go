@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -29,12 +30,13 @@ type Line struct {
 	Text     string
 	Time     time.Time
 	Position int64 // get by Tell()
+	Inode    uint64
 	Err      error // Error from tail
 }
 
 // NewLine returns a Line with present time.
 func NewLine(text string) *Line {
-	return &Line{text, time.Now(), PositionNone, nil}
+	return &Line{text, time.Now(), PositionNone, 0, nil}
 }
 
 // SeekInfo represents arguments to `os.Seek`
@@ -72,6 +74,7 @@ type Tail struct {
 	changes *watch.FileChanges
 
 	tomb.Tomb // provides: Done, Kill, Dying
+	inode     uint64
 }
 
 var (
@@ -167,6 +170,12 @@ func (tail *Tail) reopen() error {
 				continue
 			}
 			return fmt.Errorf("Unable to open file %s: %s", tail.Filename, err)
+		} else {
+			if fi, err := tail.file.Stat(); err == nil {
+				if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+					tail.inode = st.Ino
+				}
+			}
 		}
 		break
 	}
@@ -234,7 +243,7 @@ func (tail *Tail) tailFileSync() {
 				msg := fmt.Sprintf(
 					"Too much log activity; waiting a second " +
 						"before resuming tailing")
-				tail.Lines <- &Line{msg, time.Now(), PositionNone, fmt.Errorf(msg)}
+				tail.Lines <- &Line{msg, time.Now(), PositionNone, tail.inode, fmt.Errorf(msg)}
 				select {
 				case <-time.After(time.Second):
 				case <-tail.Dying():
@@ -350,7 +359,7 @@ func (tail *Tail) sendLine(line string, position int64) bool {
 	}
 
 	for i, line := range lines {
-		tail.Lines <- &Line{line, now, position + int64(i*tail.MaxLineSize), nil}
+		tail.Lines <- &Line{line, now, position + int64(i*tail.MaxLineSize), tail.inode, nil}
 	}
 
 	if tail.Config.RateLimiter != nil {

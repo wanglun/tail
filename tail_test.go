@@ -12,6 +12,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -57,8 +58,10 @@ func TestStop(t *testing.T) {
 func TestMaxLineSize(_t *testing.T) {
 	t := NewTailTest("maxlinesize", _t)
 	t.CreateFile("test.txt", "hello\nworld\nfin\nhe")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: true, Location: nil, MaxLineSize: 3})
-	go t.VerifyTailOutput(tail, []string{"hel", "lo", "wor", "ld", "fin", "he"}, []int64{0, 3, 6, 9, 12, 16})
+	go t.VerifyTailOutput(tail, []string{"hel", "lo", "wor", "ld", "fin", "he"},
+		[]int64{0, 3, 6, 9, 12, 16}, []uint64{inode, inode, inode, inode, inode, inode})
 
 	// Delete after a reasonable delay, to give tail sufficient time
 	// to read all lines.
@@ -72,8 +75,10 @@ func TestOver4096ByteLine(_t *testing.T) {
 	t := NewTailTest("Over4096ByteLine", _t)
 	testString := strings.Repeat("a", 4097)
 	t.CreateFile("test.txt", "test\n"+testString+"\nhello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: true, Location: nil})
-	go t.VerifyTailOutput(tail, []string{"test", testString, "hello", "world"}, []int64{0, 5, 4103, 4109})
+	go t.VerifyTailOutput(tail, []string{"test", testString, "hello", "world"},
+		[]int64{0, 5, 4103, 4109}, []uint64{inode, inode, inode, inode})
 
 	// Delete after a reasonable delay, to give tail sufficient time
 	// to read all lines.
@@ -86,8 +91,10 @@ func TestOver4096ByteLineWithSetMaxLineSize(_t *testing.T) {
 	t := NewTailTest("Over4096ByteLineMaxLineSize", _t)
 	testString := strings.Repeat("a", 4097)
 	t.CreateFile("test.txt", "test\n"+testString+"\nhello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: true, Location: nil, MaxLineSize: 4097})
-	go t.VerifyTailOutput(tail, []string{"test", testString, "hello", "world"}, []int64{0, 5, 4103, 4109})
+	go t.VerifyTailOutput(tail, []string{"test", testString, "hello", "world"},
+		[]int64{0, 5, 4103, 4109}, []uint64{inode, inode, inode, inode})
 
 	// Delete after a reasonable delay, to give tail sufficient time
 	// to read all lines.
@@ -100,8 +107,10 @@ func TestOver4096ByteLineWithSetMaxLineSize(_t *testing.T) {
 func TestLocationFull(_t *testing.T) {
 	t := NewTailTest("location-full", _t)
 	t.CreateFile("test.txt", "hello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: true, Location: nil})
-	go t.VerifyTailOutput(tail, []string{"hello", "world"}, []int64{0, 6})
+	go t.VerifyTailOutput(tail, []string{"hello", "world"},
+		[]int64{0, 6}, []uint64{inode, inode})
 
 	// Delete after a reasonable delay, to give tail sufficient time
 	// to read all lines.
@@ -114,8 +123,10 @@ func TestLocationFull(_t *testing.T) {
 func TestLocationFullDontFollow(_t *testing.T) {
 	t := NewTailTest("location-full-dontfollow", _t)
 	t.CreateFile("test.txt", "hello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: false, Location: nil})
-	go t.VerifyTailOutput(tail, []string{"hello", "world"}, []int64{0, 6})
+	go t.VerifyTailOutput(tail, []string{"hello", "world"},
+		[]int64{0, 6}, []uint64{inode, inode})
 
 	// Add more data only after reasonable delay.
 	<-time.After(100 * time.Millisecond)
@@ -129,8 +140,10 @@ func TestLocationFullDontFollow(_t *testing.T) {
 func TestLocationEnd(_t *testing.T) {
 	t := NewTailTest("location-end", _t)
 	t.CreateFile("test.txt", "hello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: true, Location: &SeekInfo{0, os.SEEK_END}})
-	go t.VerifyTailOutput(tail, []string{"more", "data"}, []int64{12, 17})
+	go t.VerifyTailOutput(tail, []string{"more", "data"},
+		[]int64{12, 17}, []uint64{inode, inode})
 
 	<-time.After(100 * time.Millisecond)
 	t.AppendFile("test.txt", "more\ndata\n")
@@ -147,8 +160,10 @@ func TestLocationMiddle(_t *testing.T) {
 	// Test reading from middle.
 	t := NewTailTest("location-end", _t)
 	t.CreateFile("test.txt", "hello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail("test.txt", Config{Follow: true, Location: &SeekInfo{-6, os.SEEK_END}})
-	go t.VerifyTailOutput(tail, []string{"world", "more", "data"}, []int64{6, 12, 17})
+	go t.VerifyTailOutput(tail, []string{"world", "more", "data"},
+		[]int64{6, 12, 17}, []uint64{inode, inode, inode})
 
 	<-time.After(100 * time.Millisecond)
 	t.AppendFile("test.txt", "more\ndata\n")
@@ -173,23 +188,45 @@ func _TestReOpen(_t *testing.T, poll bool) {
 	}
 	t := NewTailTest(name, _t)
 	t.CreateFile("test.txt", "hello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail(
 		"test.txt",
 		Config{Follow: true, ReOpen: true, Poll: poll})
 
-	go t.VerifyTailOutput(tail, []string{"hello", "world", "more", "data", "endofworld"}, []int64{0, 6, 0, 5, 0})
+	if !poll {
+		// deletion must trigger reopen
+		<-time.After(delay)
+		t.RemoveFile("test.txt")
+		<-time.After(delay)
+		t.CreateFile("test.txt", "more\ndata\n")
+		inode_1 := t.FileInode("test.txt")
 
-	// deletion must trigger reopen
-	<-time.After(delay)
-	t.RemoveFile("test.txt")
-	<-time.After(delay)
-	t.CreateFile("test.txt", "more\ndata\n")
+		// rename must trigger reopen
+		<-time.After(delay)
+		t.RenameFile("test.txt", "test.txt.rotated")
+		<-time.After(delay)
+		t.CreateFile("test.txt", "endofworld")
+		inode_2 := t.FileInode("test.txt")
 
-	// rename must trigger reopen
-	<-time.After(delay)
-	t.RenameFile("test.txt", "test.txt.rotated")
-	<-time.After(delay)
-	t.CreateFile("test.txt", "endofworld")
+		go t.VerifyTailOutput(tail, []string{"hello", "world", "more", "data", "endofworld"},
+			[]int64{0, 6, 0, 5, 0}, []uint64{inode, inode, inode_1, inode_1, inode_2})
+	} else {
+		// FIXME verify inode when poll
+		go t.VerifyTailOutput(tail, []string{"hello", "world", "more", "data", "endofworld"},
+			[]int64{0, 6, 0, 5, 0}, []uint64{inode, inode})
+
+		// deletion must trigger reopen
+		<-time.After(delay)
+		t.RemoveFile("test.txt")
+		<-time.After(delay)
+		t.CreateFile("test.txt", "more\ndata\n")
+
+		// rename must trigger reopen
+		<-time.After(delay)
+		t.RenameFile("test.txt", "test.txt.rotated")
+		<-time.After(delay)
+		t.CreateFile("test.txt", "endofworld")
+	}
 
 	// Delete after a reasonable delay, to give tail sufficient time
 	// to read all lines.
@@ -224,12 +261,14 @@ func _TestReSeek(_t *testing.T, poll bool) {
 	}
 	t := NewTailTest(name, _t)
 	t.CreateFile("test.txt", "a really long string goes here\nhello\nworld\n")
+	inode := t.FileInode("test.txt")
 	tail := t.StartTail(
 		"test.txt",
 		Config{Follow: true, ReOpen: false, Poll: poll})
 
 	go t.VerifyTailOutput(tail, []string{
-		"a really long string goes here", "hello", "world", "h311o", "w0r1d", "endofworld"}, []int64{0, 31, 37, 0, 6, 12})
+		"a really long string goes here", "hello", "world", "h311o", "w0r1d", "endofworld"},
+		[]int64{0, 31, 37, 0, 6, 12}, []uint64{inode, inode, inode, inode, inode, inode})
 
 	// truncate now
 	<-time.After(100 * time.Millisecond)
@@ -261,6 +300,7 @@ func TestReSeekPolling(_t *testing.T) {
 func TestRateLimiting(_t *testing.T) {
 	t := NewTailTest("rate-limiting", _t)
 	t.CreateFile("test.txt", "hello\nworld\nagain\nextra\n")
+	inode := t.FileInode("test.txt")
 	config := Config{
 		Follow:      true,
 		RateLimiter: ratelimiter.NewLeakyBucket(2, time.Second)}
@@ -272,7 +312,8 @@ func TestRateLimiting(_t *testing.T) {
 		"hello", "world", "again",
 		leakybucketFull,
 		"more", "data",
-		leakybucketFull}, []int64{0, 6, 12, PositionNone, 24, 29, PositionNone})
+		leakybucketFull}, []int64{0, 6, 12, PositionNone, 24, 29, PositionNone},
+		[]uint64{inode, inode, inode, inode, inode, inode, inode})
 
 	// Add more data only after reasonable delay.
 	<-time.After(1200 * time.Millisecond)
@@ -390,6 +431,24 @@ func (t TailTest) TruncateFile(name string, contents string) {
 	}
 }
 
+func (t TailTest) FileInode(name string) (inode uint64) {
+	f, err := os.OpenFile(t.path+"/"+name, os.O_RDONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatal(err)
+	}
+	return st.Ino
+}
+
 func (t TailTest) StartTail(name string, config Config) *Tail {
 	tail, err := TailFile(t.path+"/"+name, config)
 	if err != nil {
@@ -398,7 +457,7 @@ func (t TailTest) StartTail(name string, config Config) *Tail {
 	return tail
 }
 
-func (t TailTest) VerifyTailOutput(tail *Tail, lines []string, positions []int64) {
+func (t TailTest) VerifyTailOutput(tail *Tail, lines []string, positions []int64, inodes []uint64) {
 	if len(lines) != len(positions) {
 		t.Fatal("len(lines) not equal len(positions)")
 	}
@@ -428,6 +487,12 @@ func (t TailTest) VerifyTailOutput(tail *Tail, lines []string, positions []int64
 				"unexpected position/err from tail: "+
 					"expecting <<%d>>>, but got <<<%d>>>",
 				positions[idx], tailedLine.Position)
+		}
+		if idx < len(inodes) && tailedLine.Inode != inodes[idx] {
+			t.Fatalf(
+				"unexpected inode/err from tail: "+
+					"expecting <<%d>>>, but got <<<%d>>>",
+				inodes[idx], tailedLine.Inode)
 		}
 	}
 	line, ok := <-tail.Lines
